@@ -88,9 +88,11 @@ bool json_iter_extract_bool(const char *key, const struct json_object_iter *iter
     return result;
 }
 
-bool parse_config_file(bool is_server, const char *file, struct server_config *config) {
+struct server_config* parse_config_file(bool is_server, const char* file)
+{
     bool result = false;
     json_object *jso = NULL;
+    struct server_config* config = config_create();
     do {
         struct json_object_iter iter = { NULL };
 
@@ -137,9 +139,37 @@ bool parse_config_file(bool is_server, const char *file, struct server_config *c
                 config->udp = obj_bool;
                 continue;
             }
-            if (json_iter_extract_int("timeout", &iter, &obj_int)) {
+            if (json_iter_extract_int("idle_timeout", &iter, &obj_int)) {
                 config->idle_timeout = obj_int * MILLISECONDS_PER_SECOND;
                 continue;
+            }
+            if (json_iter_extract_int("connect_timeout", &iter, &obj_int)) {
+                config->connect_timeout_ms = ((uint64_t)obj_int) * MILLISECONDS_PER_SECOND;
+                continue;
+            }
+            if (json_iter_extract_int("udp_timeout", &iter, &obj_int)) {
+                config->udp_timeout = ((uint64_t)obj_int) * MILLISECONDS_PER_SECOND;
+                continue;
+            }
+
+            // Backward compatibility with old client configure file format.
+            if (is_server == false) {
+                if (json_iter_extract_string("server", &iter, &obj_str)) {
+                    string_safe_assign(&config->remote_host, obj_str);
+                    continue;
+                }
+                if (json_iter_extract_int("server_port", &iter, &obj_int)) {
+                    config->remote_port = obj_int;
+                    continue;
+                }
+                if (json_iter_extract_string("local_address", &iter, &obj_str)) {
+                    string_safe_assign(&config->listen_host, obj_str);
+                    continue;
+                }
+                if (json_iter_extract_int("local_port", &iter, &obj_int)) {
+                    config->listen_port = obj_int;
+                    continue;
+                }
             }
 
             if (json_iter_extract_object("server_settings", &iter, &obj_obj)) {
@@ -194,6 +224,7 @@ bool parse_config_file(bool is_server, const char *file, struct server_config *c
                 struct json_object_iter iter2 = { NULL };
                 json_object_object_foreachC(obj_obj, iter2) {
                     const char *obj_str2 = NULL;
+                    obj_bool = false;
 
                     if (json_iter_extract_bool("enable", &iter2, &obj_bool)) {
                         config->over_tls_enable = obj_bool;
@@ -205,6 +236,10 @@ bool parse_config_file(bool is_server, const char *file, struct server_config *c
                     }
                     if (json_iter_extract_string("path", &iter2, &obj_str2)) {
                         string_safe_assign(&config->over_tls_path, obj_str2);
+                        continue;
+                    }
+                    if (json_iter_extract_bool("target_address", &iter2, &obj_bool)) {
+                        config->target_address = obj_bool;
                         continue;
                     }
                     if (json_iter_extract_string("root_cert_file", &iter2, &obj_str2)) {
@@ -220,5 +255,9 @@ bool parse_config_file(bool is_server, const char *file, struct server_config *c
     if (jso) {
         json_object_put(jso);
     }
-    return result;
+    if (result == false) {
+        config_release(config);
+        config = NULL;
+    }
+    return config;
 }

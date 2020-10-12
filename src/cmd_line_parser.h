@@ -11,6 +11,11 @@ struct cmd_line_info {
     char * cfg_file;
     bool daemon_flag;
     bool help_flag;
+    bool force_quit;
+#ifdef ANDROID
+    int log_tx_rx;
+    char *prefix;
+#endif
 };
 
 struct cmd_line_info * cmd_line_info_create(int argc, char * const argv[]);

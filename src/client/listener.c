@@ -28,9 +28,7 @@
 #include "ssr_executive.h"
 #include "ssr_client_api.h"
 #include "common.h"
-#if UDP_RELAY_ENABLE
 #include "udprelay.h"
-#endif // UDP_RELAY_ENABLE
 
 #ifndef INET6_ADDRSTRLEN
 # define INET6_ADDRSTRLEN 63
@@ -50,6 +48,7 @@ struct ssr_client_state {
     uv_signal_t *sigterm_watcher;
 
     bool shutting_down;
+    bool force_quit;
     
     int listener_count;
     struct listener_t *listeners;
@@ -57,6 +56,8 @@ struct ssr_client_state {
     void(*feedback_state)(struct ssr_client_state *state, void *p);
     void *ptr;
 };
+
+extern void udp_on_recv_data(struct udp_listener_ctx_t *udp_ctx, const union sockaddr_universal *src_addr, const struct buffer_t *data, void*p);
 
 static void getaddrinfo_done_cb(uv_getaddrinfo_t *req, int status, struct addrinfo *addrs);
 static void listen_incoming_connection_cb(uv_stream_t *server, int status);
@@ -114,6 +115,12 @@ int ssr_run_loop_begin(struct server_config *cf, void(*feedback_state)(struct ss
         pr_err("uv_run: %s", uv_strerror(err));
     }
 
+    if (uv_loop_close(loop) != 0) {
+        if (state->force_quit == false) {
+            ASSERT(false);
+        }
+    }
+
     ssr_cipher_env_release(state->env);
 
     if (state->listeners) {
@@ -134,6 +141,23 @@ static void tcp_close_done_cb(uv_handle_t* handle) {
     free((void *)((uv_tcp_t *)handle));
 }
 
+void state_set_force_quit(struct ssr_client_state *state, bool force_quit) {
+    state->force_quit = force_quit;
+}
+
+void force_quit_timer_close_cb(uv_handle_t* handle) {
+    // For some reason, uv_close may NOT always be work fine. 
+    // sometimes uv_close_cb perhaps never called. 
+    // so we have to call uv_stop to force exit the loop.
+    // it can caused memory leaking. but who cares it?
+    uv_stop(handle->loop);
+    free(handle);
+}
+
+void force_quit_timer_cb(uv_timer_t* handle) {
+    uv_close((uv_handle_t*)handle, force_quit_timer_close_cb);
+}
+
 void ssr_run_loop_shutdown(struct ssr_client_state *state) {
     if (state==NULL) {
         return;
@@ -145,7 +169,9 @@ void ssr_run_loop_shutdown(struct ssr_client_state *state) {
     state->shutting_down = true;
 
     uv_signal_stop(state->sigint_watcher);
+    uv_close((uv_handle_t*)state->sigint_watcher, NULL);
     uv_signal_stop(state->sigterm_watcher);
+    uv_close((uv_handle_t*)state->sigterm_watcher, NULL);
 
     if (state->listeners && state->listener_count) {
         size_t n = 0;
@@ -158,19 +184,23 @@ void ssr_run_loop_shutdown(struct ssr_client_state *state) {
                 uv_close((uv_handle_t *)tcp_server, tcp_close_done_cb);
             }
 
-#if UDP_RELAY_ENABLE
             udp_server = listener->udp_server;
             if (udp_server) {
                 udprelay_shutdown(udp_server);
             }
-#endif // UDP_RELAY_ENABLE
         }
     }
 
-    client_shutdown(state->env);
+    client_env_shutdown(state->env);
 
     pr_info(" ");
     pr_info("terminated.\n");
+
+    if (state->force_quit) {
+        uv_timer_t *t = (uv_timer_t*) calloc(1, sizeof(*t));
+        uv_timer_init(state->sigint_watcher->loop, t);
+        uv_timer_start(t, force_quit_timer_cb, 3000, 0); // wait 3 seconds.
+    }
 }
 
 int ssr_get_listen_socket_fd(struct ssr_client_state *state) {
@@ -195,7 +225,7 @@ static void getaddrinfo_done_cb(uv_getaddrinfo_t *req, int status, struct addrin
     uv_loop_t *loop;
     unsigned int n;
     int err;
-    union sockaddr_universal s = { 0 };
+    union sockaddr_universal s = { {0} };
 
     loop = req->loop;
 
@@ -286,21 +316,20 @@ static void getaddrinfo_done_cb(uv_getaddrinfo_t *req, int status, struct addrin
 
         port = get_socket_port(tcp_server);
 
-        pr_info("listening on     %s:%hu\n", addrbuf, port);
-
-#if UDP_RELAY_ENABLE
-        if (cf->udp) {
-            union sockaddr_universal remote_addr = { 0 };
-            convert_universal_address(cf->remote_host, cf->remote_port, &remote_addr);
-
-            listener->udp_server = udprelay_begin(loop,
-                cf->listen_host, port,
-                &remote_addr,
-                NULL, 0, cf->idle_timeout,
-                state->env->cipher,
-                cf->protocol, cf->protocol_param);
+        if (s.addr6.sin6_family == AF_INET6) {
+            pr_info("listening on     [%s]:%hu\n", addrbuf, port);
+        } else {
+            pr_info("listening on     %s:%hu\n", addrbuf, port);
         }
-#endif // UDP_RELAY_ENABLE
+
+        if (cf->udp) {
+            union sockaddr_universal remote_addr = { {0} };
+            universal_address_from_string(cf->remote_host, cf->remote_port, true, &remote_addr);
+
+            listener->udp_server = udprelay_begin(loop, cf->listen_host, port, &remote_addr, state->env->cipher);
+
+            udp_relay_set_udp_on_recv_data_callback(listener->udp_server, &udp_on_recv_data, NULL);
+        }
 
         n += 1;
     }

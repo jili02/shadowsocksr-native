@@ -13,6 +13,7 @@ struct cipher_env_t;
 struct obfs_t;
 struct tunnel_ctx;
 struct cstl_set;
+struct cstl_map;
 
 struct server_config {
     char *listen_host;
@@ -23,14 +24,19 @@ struct server_config {
     char *method;
     char *protocol;
     char *protocol_param;
+    struct cstl_map *user_id_auth_key;
+    unsigned int max_client;
     char *obfs;
     char *obfs_param;
     bool over_tls_enable;
     char *over_tls_server_domain;
     char *over_tls_path;
     char *over_tls_root_cert_file;
+    bool target_address;
     bool udp;
     unsigned int idle_timeout; /* Connection idle timeout in ms. */
+    uint64_t connect_timeout_ms;
+    uint64_t udp_timeout;
     char *remarks;
 };
 
@@ -83,6 +89,8 @@ void string_safe_assign(char **target, const char *value);
 #define DEFAULT_BIND_HOST     "127.0.0.1"
 #define DEFAULT_BIND_PORT     1080
 #define DEFAULT_IDLE_TIMEOUT  (60 * MILLISECONDS_PER_SECOND)
+#define DEFAULT_CONNECT_TIMEOUT  (6 * MILLISECONDS_PER_SECOND)
+#define DEFAULT_UDP_TIMEOUT      (6 * MILLISECONDS_PER_SECOND)
 #define DEFAULT_METHOD        "rc4-md5"
 
 #if !defined(TCP_BUF_SIZE_MAX)
@@ -91,6 +99,11 @@ void string_safe_assign(char **target, const char *value);
 
 struct server_config * config_create(void);
 void config_release(struct server_config *cf);
+void config_ssrot_revision(struct server_config* config);
+
+void config_parse_protocol_param(struct server_config *config, const char *param);
+void config_add_user_id_with_auth_key(struct server_config *config, const char *user_id, const char *auth_key);
+bool config_is_user_exist(struct server_config *config, const char *user_id, const char **auth_key, bool *is_multi_user);
 
 int tunnel_ctx_compare_for_c_set(const void *left, const void *right);
 
@@ -102,7 +115,7 @@ struct cstl_set * cstl_set_container_create(int(*compare_objs)(const void*,const
 void cstl_set_container_destroy(struct cstl_set *set);
 void cstl_set_container_add(struct cstl_set *set, void *obj);
 void cstl_set_container_remove(struct cstl_set *set, void *obj);
-void cstl_set_container_traverse(struct cstl_set *set, void(*fn)(const void *obj, void *p), void *p);
+void cstl_set_container_traverse(struct cstl_set *set, void(*fn)(struct cstl_set *set, const void *obj, bool *stop, void *p), void *p);
 
 struct cstl_list;
 struct cstl_list * obj_list_create(int(*compare_objs)(const void*,const void*), void(*destroy_obj)(void*));
@@ -130,12 +143,7 @@ enum ssr_error tunnel_cipher_client_encrypt(struct tunnel_cipher_ctx *tc, struct
 enum ssr_error tunnel_cipher_client_decrypt(struct tunnel_cipher_ctx *tc, struct buffer_t *buf, struct buffer_t **feedback);
 
 struct buffer_t * tunnel_cipher_server_encrypt(struct tunnel_cipher_ctx *tc, const struct buffer_t *buf);
-struct buffer_t * tunnel_cipher_server_decrypt(struct tunnel_cipher_ctx *tc, const struct buffer_t *buf, struct buffer_t **receipt, struct buffer_t **confirm);
-
-enum ssr_error tunnel_tls_cipher_client_encrypt(struct tunnel_cipher_ctx *tc, struct buffer_t *buf);
-enum ssr_error tunnel_tls_cipher_client_decrypt(struct tunnel_cipher_ctx *tc, struct buffer_t *buf, struct buffer_t **feedback);
-struct buffer_t * tunnel_tls_cipher_server_encrypt(struct tunnel_cipher_ctx *tc, const struct buffer_t *buf);
-struct buffer_t * tunnel_tls_cipher_server_decrypt(struct tunnel_cipher_ctx *tc, const struct buffer_t *buf, struct buffer_t **receipt, struct buffer_t **confirm);
+struct buffer_t * tunnel_cipher_server_decrypt(struct tunnel_cipher_ctx *tc, const struct buffer_t *buf, struct buffer_t **obfs_receipt, struct buffer_t **proto_confirm);
 
 bool pre_parse_header(struct buffer_t *data);
 

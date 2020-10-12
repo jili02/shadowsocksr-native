@@ -1,11 +1,19 @@
 ![shadowsocksr-native](https://avatars0.githubusercontent.com/u/30504070?s=200&v=4)
 
+<!--
+As I typed each line of code, I was full of fear. Cherish what you using.
+敲下每一行代码时，我都充满了恐惧；大伙且用且珍惜。
+-->
 
 # ShadowsocksR-native
 
 [![Join the chat at https://gitter.im/ShadowsocksR-Live/](https://cdn03.gitter.im/_s/9177b02/images/favicon-read.ico)](https://gitter.im/ShadowsocksR-Live/Lobby)
 
 [新特性: GFW 终结者 SSRoT](https://github.com/ShadowsocksR-Live/shadowsocksr-native/wiki)
+
+[写给高危翻墙人士](https://github.com/ShadowsocksR-Live/shadowsocksr-native/wiki/%E5%86%99%E7%BB%99%E9%AB%98%E5%8D%B1%E7%BF%BB%E5%A2%99%E4%BA%BA%E5%A3%AB)
+
+[帮助开发者改善 SSRoT](https://github.com/ShadowsocksR-Live/shadowsocksr-native/wiki/%E5%B8%AE%E5%8A%A9%E4%BD%9C%E8%80%85%E6%94%B9%E5%96%84-SSRoT)
 
 [New feature: GFW terminator SSRoT English tutorial](https://palitechsociety.blogspot.com/2019/08/shadowsocksr-over-tls-ssrot-server.html)
 
@@ -92,11 +100,8 @@ progress of data flow
 ### Distribution-specific guide
 
 - [Debian & Ubuntu](#debian--ubuntu)
-    + [Install from repository](#debian--ubuntu)
 - [Fedora & RHEL](#fedora--rhel)
-    + [Install from repository](#centos)
 - [CentOS](#centos)
-    + [Install from repository](#centos)
 - [macOS](#macos)
 - [Windows](#windows)
 
@@ -109,14 +114,14 @@ e.g. Ubuntu, Debian or Linux Mint, you can build the binary like this:
 
 ```bash
 # Debian / Ubuntu
-sudo su                       # using root account
-apt-get install --no-install-recommends build-essential autoconf libtool asciidoc xmlto -y
-apt-get install git gcc g++ cmake automake -y
-apt-get -f install -y
-apt-get update -y
-apt-get upgrade -y
+# sudo su                       # using root account
+sudo apt-get update -y
+sudo apt-get upgrade -y
+sudo apt-get install --no-install-recommends build-essential autoconf libtool asciidoc xmlto -y
+sudo apt-get install git gcc g++ gdb cmake automake -y
+sudo apt-get -f install -y
 
-cd /                          # switch to root directory
+# cd /                          # switch to root directory
 git clone https://github.com/ShadowsocksR-Live/shadowsocksr-native.git
 mv shadowsocksr-native ssr-n  # rename shadowsocksr-native to ssr-n
 cd ssr-n                      # enter ssr-n directory. 
@@ -124,12 +129,13 @@ git submodule update --init
 git submodule foreach -q 'git checkout $(git config -f $toplevel/.gitmodules submodule.$name.branch || echo master)'
 
 # build ShadowsocksR-native
-cmake CMakeLists.txt && make
+mkdir build && cd build
+cmake .. && make
 # make install
 # /bin/cp -rfa src/ssr-* /usr/bin
 ```
 
-The target binaries are `ssr-n/src/ssr-server`, `ssr-n/src/ssr-client` and `ssr-n/src/ssr-local`.
+The target binaries are `ssr-n/build/src/ssr-server`, `ssr-n/build/src/ssr-client` and `ssr-n/build/src/ssr-local`.
 
 ### CentOS
 
@@ -140,7 +146,7 @@ Before build `ssr-Native`, we must install `cmake` 3.x first. following [this](#
 ```bash
 # CentOS / Fedora / RHEL
 sudo su
-yum install wget git gcc gcc-c++ autoconf automake libtool make asciidoc xmlto -y
+yum install wget git gcc gcc-c++ gdb autoconf automake libtool make asciidoc xmlto -y
 curl https://cmake.org/files/v3.14/cmake-3.14.0-Linux-x86_64.sh -o a.sh
 sh a.sh --prefix=/usr/ --exclude-subdir && rm -rf a.sh
 cd /
@@ -219,8 +225,10 @@ config.json
     "obfs": "tls1.2_ticket_auth",
     "obfs_param": "",
 
-    "udp": false,
-    "timeout": 300,
+    "udp": true,
+    "idle_timeout": 300,
+    "connect_timeout": 6,
+    "udp_timeout": 6,
 
     "server_settings": {
         "listen_address": "0.0.0.0",
@@ -298,3 +306,9 @@ To uninstall the server, use the following command
 ```
 ./ssrn-install.sh uninstall
 ```
+
+
+## Stargazers over time
+
+[![Stargazers over time](https://starchart.cc/ShadowsocksR-Live/shadowsocksr-native.svg)](https://starchart.cc/ShadowsocksR-Live/shadowsocksr-native)
+      

@@ -81,9 +81,6 @@
     <ClCompile Include="..\..\src\udprelay.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\src\netutils.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\src\ssr_cipher_names.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -126,7 +123,7 @@
     <ClCompile Include="..\..\src\client\tls_cli.c">
       <Filter>client</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\src\ws_tls_basic.c">
+    <ClCompile Include="..\..\src\websocket_basic.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\depends\http-parser\http_parser.c">
@@ -134,6 +131,9 @@
     </ClCompile>
     <ClCompile Include="..\..\depends\http-parser\http_parser_wrapper.c">
       <Filter>http-parser</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\exe_file_path.c">
+      <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -242,14 +242,20 @@
     <ClInclude Include="..\..\src\client\tls_cli.h">
       <Filter>client</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\src\ws_tls_basic.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\depends\http-parser\http_parser.h">
       <Filter>http-parser</Filter>
     </ClInclude>
     <ClInclude Include="..\..\depends\http-parser\http_parser_wrapper.h">
       <Filter>http-parser</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\websocket_basic.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\ref_count_def.h">
+      <Filter>client</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\src\exe_file_path.h">
+      <Filter>Source Files</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

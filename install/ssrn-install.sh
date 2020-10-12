@@ -7,6 +7,8 @@ export PATH
 #   Author: ssrlive                                               #
 #=================================================================#
 
+source /etc/os-release
+
 proj_name="ShadowsocksR Native"
 
 daemon_script_url="https://raw.githubusercontent.com/ShadowsocksR-Live/shadowsocksr-native/master/install/ssr-daemon.sh"
@@ -342,16 +344,24 @@ function install_build_tools() {
 
     # Install necessary dependencies
     if check_sys packageManager yum; then
-        yum install wget curl git gcc gcc-c++ autoconf automake libtool make asciidoc xmlto -y
+        yum install wget curl git gcc gcc-c++ gdb autoconf automake libtool make asciidoc xmlto -y
     elif check_sys packageManager apt; then
         apt-get -f install -y
         apt-get -y update
         apt-get -y upgrade
         apt-get -y install --no-install-recommends build-essential autoconf libtool asciidoc xmlto
-        apt-get -y install git gcc g++ wget curl automake
+        apt-get -y install git gcc g++ gdb wget curl automake
     fi
 
-    curl https://cmake.org/files/v3.12/cmake-3.12.1-Linux-x86_64.sh -o cmake_pkg.sh
+    if [[ "${ID}" == "centos" ]]; then
+        echo "Installing CentOS kernel-headers ..."
+        rm -rf kernel-headers.rpm
+        curl http://vault.centos.org/5.7/os/x86_64/CentOS/kernel-headers-2.6.18-274.el5.x86_64.rpm -o kernel-headers.rpm
+        rpm -ivh kernel-headers.rpm
+        rm -rf kernel-headers.rpm
+    fi
+
+    curl https://cmake.org/files/v3.18/cmake-3.18.4-Linux-x86_64.sh -o cmake_pkg.sh
     sh cmake_pkg.sh --prefix=/usr/ --exclude-subdir && rm -rf cmake_pkg.sh
 }
 
@@ -421,8 +431,10 @@ function write_ssr_config() {
     "obfs": "${shadowsockobfs}",
     "obfs_param": "",
 
-    "udp": false,
-    "timeout": 300,
+    "udp": ${ssr_ot_flag},
+    "idle_timeout": 300,
+    "connect_timeout": 6,
+    "udp_timeout": 6,
 
     "server_settings": {
         "listen_address": "0.0.0.0",
@@ -460,6 +472,10 @@ function write_service_description_file() {
     ExecReload=${svc_stub} restart
     ExecStop=${svc_stub} stop
     PrivateTmp=true
+    Restart=on-failure
+    RestartSec=35s
+    LimitNOFILE=1000000
+    LimitCORE=infinity
 [Install]
     WantedBy=multi-user.target
 EOF
@@ -475,7 +491,7 @@ function install_ssr_service() {
     if [ -f ${target_dir}/${bin_name} ]; then
 
         # Download ShadowsocksR Native service script
-        if ! wget --no-check-certificate ${daemon_script_url} -O ${service_stub} ; then
+        if ! curl -L ${daemon_script_url} -o ${service_stub} ; then
             echo -e "[${red}Error${plain}] Failed to download ${proj_name} Native chkconfig file!"
             exit 1
         fi
@@ -523,29 +539,33 @@ function install_ssr_service() {
     fi
 }
 
+function do_uninstall_ssr_action() {
+    ${service_stub} status > /dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        ${service_stub} stop
+    fi
+    if check_sys packageManager yum; then
+        chkconfig --del ${service_name}
+    elif check_sys packageManager apt; then
+        update-rc.d -f ${service_name} remove
+    fi
+
+    systemctl stop ${service_name}.service
+
+    rm -rf ${config_dir}
+    rm -f ${service_stub}
+    rm -f ${target_dir}/${bin_name}
+    rm -f ${service_dir}/${service_name}.service
+    echo "ShadowsocksR uninstall success!"
+}
+
 # Uninstall ShadowsocksR
 function uninstall_shadowsocksr() {
     printf "Are you sure uninstall ${proj_name}? (y/n)\n"
     read -p "(Default: n):" answer
     [ -z ${answer} ] && answer="n"
     if [ "${answer}" == "y" ] || [ "${answer}" == "Y" ]; then
-        ${service_stub} status > /dev/null 2>&1
-        if [ $? -eq 0 ]; then
-            ${service_stub} stop
-        fi
-        if check_sys packageManager yum; then
-            chkconfig --del ${service_name}
-        elif check_sys packageManager apt; then
-            update-rc.d -f ${service_name} remove
-        fi
-
-        systemctl stop ${service_name}.service
-
-        rm -rf ${config_dir}
-        rm -f ${service_stub}
-        rm -f ${target_dir}/${bin_name}
-        rm -f ${service_dir}/${service_name}.service
-        echo "ShadowsocksR uninstall success!"
+        do_uninstall_ssr_action
     else
         echo
         echo "uninstall cancelled, nothing to do..."
@@ -566,6 +586,8 @@ function install_shadowsocksr() {
     cd ${cur_dir}
 
     install_build_tools
+
+    do_uninstall_ssr_action
 
     build_ssr_native
 

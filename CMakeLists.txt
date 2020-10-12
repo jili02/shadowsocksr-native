@@ -13,11 +13,15 @@ set(PROJECT_NAME shadowsocksr-native)
 set(RELEASE_DATE 2015-09-03)
 project(${PROJECT_NAME} VERSION 0.6.0 LANGUAGES C)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(with_crypto_library "mbedtls" CACHE STRING "build with the given crypto library, TYPE=mbedtls")
 
+IF(MSVC)
+  include_directories( ${CMAKE_CURRENT_SOURCE_DIR}/win32/include )
+ENDIF(MSVC)
+
 add_subdirectory(depends/mbedtls)
-add_subdirectory(depends/zlib/staticbuild)
-add_subdirectory(depends/pcre/staticbuild)
 
 include ( cmake/dist.cmake )
 include ( configure )
@@ -26,13 +30,10 @@ configure_file ( ${CMAKE_CURRENT_SOURCE_DIR}/config.h.cmake ${CMAKE_CURRENT_BINA
 ADD_DEFINITIONS(-DHAVE_CONFIG_H)
 
 add_subdirectory(depends/libsodium)
-add_subdirectory(libcork)
-add_subdirectory(libipset)
 add_subdirectory(depends/libuv)
-add_subdirectory(depends/json-c/staticbuild)
+add_subdirectory(depends/json-c)
 add_subdirectory(depends/uv-mbed/win32)
 
 include_directories( ${CMAKE_CURRENT_BINARY_DIR} )
 
-add_subdirectory(libudns)
 add_subdirectory(src)

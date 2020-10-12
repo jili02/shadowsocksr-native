@@ -29,31 +29,58 @@
 #include "ssr_executive.h"
 #include "ssr_client_api.h"
 #include "cmd_line_parser.h"
+#include "ssr_cipher_names.h"
 #include "daemon_wrapper.h"
-#if defined(__MEM_CHECK__)
 #include "ssrbuffer.h"
-#endif // __MEM_CHECK__
+#include "exe_file_path.h"
 
 #if HAVE_UNISTD_H
 #include <unistd.h>  /* getopt */
+#endif
+
+#ifdef ANDROID
+int log_tx_rx  = 0;
+uint64_t tx    = 0;
+uint64_t rx    = 0;
+uint64_t last  = 0;
+char *prefix = NULL;
 #endif
 
 static void usage(void);
 
 struct ssr_client_state *g_state = NULL;
 void feedback_state(struct ssr_client_state *state, void *p);
+void state_set_force_quit(struct ssr_client_state *state, bool force_quit);
 void print_remote_info(const struct server_config *config);
+static bool verify_config(struct server_config *config);
+
+#if defined(__unix__) || defined(__linux__)
+#include <signal.h>
+void sighandler(int sig) {
+    pr_err("signal %d", sig);
+}
+#endif // defined(__unix__) || defined(__linux__)
+
+void fn_onexit(void) {
+    MEM_CHECK_DUMP_LEAKS();
+}
+
+struct cmd_line_info *cmds = NULL;
 
 int main(int argc, char **argv) {
     struct server_config *config = NULL;
     int err = -1;
-    struct cmd_line_info *cmds = NULL;
 
-#if defined(__MEM_CHECK__)
-    _CrtSetDbgFlag( _CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF );
-    _CrtSetBreakAlloc(63);
-    _CrtSetBreakAlloc(64);
-#endif // __MEM_CHECK__
+    #if (defined(__unix__) || defined(__linux__)) && !defined(__mips)
+    struct sigaction sa = { {&sighandler}, {{0}}, 0, NULL };
+    sigaction(SIGPIPE, &sa, NULL);
+    #endif // defined(__unix__) || defined(__linux__)
+
+    MEM_CHECK_BEGIN();
+    MEM_CHECK_BREAK_ALLOC(63);
+    MEM_CHECK_BREAK_ALLOC(64);
+
+    atexit(fn_onexit);
 
     do {
         set_app_name(argv[0]);
@@ -71,14 +98,25 @@ int main(int argc, char **argv) {
             string_safe_assign(&cmds->cfg_file, DEFAULT_CONF_PATH);
         }
 
-        config = config_create();
-        if (parse_config_file(false, cmds->cfg_file, config) == false) {
+        if ((config = parse_config_file(false, cmds->cfg_file)) == NULL) {
+            char* separ = NULL;
+            char* cfg_file = exe_file_path(&malloc);
+            if (cfg_file && ((separ = strrchr(cfg_file, PATH_SEPARATOR)))) {
+                ++separ;
+                strcpy(separ, CFG_JSON);
+                config = parse_config_file(false, cfg_file);
+            }
+            free(cfg_file);
+            if (config == NULL) {
+                break;
+            }
+        }
+
+        if (verify_config(config) == false) {
             break;
         }
 
-#ifndef UDP_RELAY_ENABLE
-        config->udp = false;
-#endif // UDP_RELAY_ENABLE
+        config_ssrot_revision(config);
 
         if (config->method == NULL || config->password==NULL || config->remote_host==NULL) {
             break;
@@ -89,6 +127,11 @@ int main(int argc, char **argv) {
             sprintf(param, "-c \"%s\"", cmds->cfg_file);
             daemon_wrapper(argv[0], param);
         }
+
+#ifdef ANDROID
+        log_tx_rx  = cmds->log_tx_rx;
+        prefix = cmds->prefix;
+#endif
 
         print_remote_info(config);
 
@@ -108,16 +151,13 @@ int main(int argc, char **argv) {
         usage();
     }
 
-#if __MEM_CHECK__
-    _CrtDumpMemoryLeaks();
-#endif // __MEM_CHECK__
-
     return 0;
 }
 
 void print_remote_info(const struct server_config *config) {
     char remote_host[256] = { 0 };
     char password[256] = { 0 };
+    union sockaddr_universal remote_addr = { { 0 } };
 
     strcpy(remote_host, config->remote_host);
     if (strlen(remote_host) > 4) {
@@ -135,8 +175,14 @@ void print_remote_info(const struct server_config *config) {
         }
     }
 
+    universal_address_from_string_no_dns(config->remote_host, config->remote_port, &remote_addr);
+
     pr_info("ShadowsocksR native client\n");
-    pr_info("remote server    %s:%hu", remote_host, config->remote_port);
+    if (remote_addr.addr6.sin6_family == AF_INET6) {
+        pr_info("remote server    [%s]:%hu", remote_host, config->remote_port);
+    } else {
+        pr_info("remote server    %s:%hu", remote_host, config->remote_port);
+    }
     pr_info("method           %s", config->method);
     pr_info("password         %s", password);
     pr_info("protocol         %s", config->protocol);
@@ -160,10 +206,32 @@ void print_remote_info(const struct server_config *config) {
 void feedback_state(struct ssr_client_state *state, void *p) {
     g_state = state;
     (void)p;
+    state_set_force_quit(state, cmds->force_quit);
+}
+
+static bool verify_config(struct server_config *config) {
+    bool result = false;
+    do {
+        static const char *FMT_CONFIG_INFO = "Unknown SSR %s \"%s\", please review your config file\n";
+        if (ss_cipher_type_of_name(config->method) == ss_cipher_max) {
+            pr_err(FMT_CONFIG_INFO, "cipher method", config->method);
+            break;
+        }
+        if (ssr_protocol_type_of_name(config->protocol) == ssr_protocol_max) {
+            pr_err(FMT_CONFIG_INFO, "protocol", config->protocol);
+            break;
+        }
+        if (ssr_obfs_type_of_name(config->obfs) == ssr_obfs_max) {
+            pr_err(FMT_CONFIG_INFO, "obfs", config->obfs);
+            break;
+        }
+        result = true;
+    } while(false);
+    return result;
 }
 
 static void usage(void) {
-    printf(""
+    printf("\n"
         "ShadowsocksR native client\n"
         "\n"
         "Usage:\n"
@@ -173,9 +241,9 @@ static void usage(void) {
         "Options:\n"
         "\n"
         "  -d                     Run in background as a daemon.\n"
-        "  -c <config file>       Configure file path.\n"
-        "                         Default: " DEFAULT_CONF_PATH "\n"
+        "  -c <config file>       Configure file path. Default: " DEFAULT_CONF_PATH "\n"
+        "  -f                     Force quit the program.\n"
         "  -h                     Show this help message.\n"
-        "",
+        "\n",
         get_app_name());
 }

@@ -75,6 +75,8 @@ struct server_config * config_create(void) {
     string_safe_assign(&config->method, DEFAULT_METHOD);
     config->listen_port = DEFAULT_BIND_PORT;
     config->idle_timeout = DEFAULT_IDLE_TIMEOUT;
+    config->connect_timeout_ms = DEFAULT_CONNECT_TIMEOUT;
+    config->udp_timeout = DEFAULT_UDP_TIMEOUT;
 
     return config;
 }
@@ -83,6 +85,9 @@ void config_release(struct server_config *cf) {
     if (cf == NULL) {
         return;
     }
+
+    obj_map_destroy(cf->user_id_auth_key);
+
     object_safe_free((void **)&cf->listen_host);
     object_safe_free((void **)&cf->remote_host);
     object_safe_free((void **)&cf->password);
@@ -97,6 +102,97 @@ void config_release(struct server_config *cf) {
     object_safe_free((void **)&cf->remarks);
 
     object_safe_free((void **)&cf);
+}
+
+//
+// Since the obfuscation operation in SSRoT is redundant, we remove it.
+//
+void config_ssrot_revision(struct server_config* config) {
+    if (config == NULL) {
+        return;
+    }
+    if (config->over_tls_enable) {
+        string_safe_assign(&config->obfs, ssr_obfs_name_of_type(ssr_obfs_plain));
+        // don't support protocol recently.
+        string_safe_assign(&config->protocol, ssr_protocol_name_of_type(ssr_protocol_origin));
+    } else {
+        // support UDP in SSRoT only.
+        config->udp = false;
+    }
+}
+
+static int uid_cmp(const void *left, const void *right) {
+    char *l = *(char **)left;
+    char *r = *(char **)right;
+    return strcmp(l, r);
+}
+
+static void uid_destroy(void *obj) {
+    if (obj) {
+        void *str = *((void **)obj);
+        if (str) {
+            free(str);
+        }
+    }
+}
+
+/* "protocol_param":"64#12345:breakwa11,233:breakwa11", */
+void config_parse_protocol_param(struct server_config *config, const char *param) {
+    char *p0 = strdup(param), *user_id = p0, *iter, *auth_key;
+    long int max_cli = 0;
+    iter = strchr(p0, '#');
+    if (iter) {
+        *iter = '\0'; iter++;
+        max_cli = strtol(p0, NULL, 10);
+        user_id = iter;
+    }
+    config->max_client = (max_cli != 0) ? (unsigned int)max_cli : 64;
+
+    do {
+        iter = strchr(user_id, ',');
+        if (iter) {
+            *iter = '\0'; iter++;
+        }
+
+        auth_key = strchr(user_id, ':');
+        if (auth_key) {
+            *auth_key = '\0'; auth_key++;
+            config_add_user_id_with_auth_key(config, user_id, auth_key);
+        }
+
+        if (iter) {
+            user_id = iter;
+        }
+    } while (iter != NULL);
+
+    free(p0);
+}
+
+void config_add_user_id_with_auth_key(struct server_config *config, const char *user_id, const char *auth_key) {
+    char *u = strdup(user_id);
+    char *a = strdup(auth_key);
+
+    if (config->user_id_auth_key == NULL) {
+        config->user_id_auth_key = obj_map_create(uid_cmp, uid_destroy, uid_destroy);
+    }
+    obj_map_add(config->user_id_auth_key, &u, sizeof(void *), &a, sizeof(void *));
+}
+
+bool config_is_user_exist(struct server_config *config, const char *user_id, const char **auth_key, bool *is_multi_user) {
+    bool result = false;
+    ASSERT(config);
+    if (config == NULL) {
+        return false;
+    }
+    ASSERT(user_id);
+    if (is_multi_user) {
+        *is_multi_user = (config->user_id_auth_key != NULL);
+    }
+    result = obj_map_exists(config->user_id_auth_key, &user_id);
+    if (result && auth_key) {
+        *auth_key = *((const char **)obj_map_find(config->user_id_auth_key, &user_id));
+    }
+    return result;
 }
 
 int tunnel_ctx_compare_for_c_set(const void *left, const void *right) {
@@ -164,16 +260,18 @@ void cstl_set_container_remove(struct cstl_set *set, void *obj) {
     cstl_set_remove(set, &obj);
 }
 
-void cstl_set_container_traverse(struct cstl_set *set, void(*fn)(const void *obj, void *p), void *p) {
+void cstl_set_container_traverse(struct cstl_set *set, void(*fn)(struct cstl_set *set, const void *obj, bool *stop, void *p), void *p) {
     struct cstl_iterator *iterator;
     const void *element;
+    bool stop = false;
     if (set==NULL || fn==NULL) {
         return;
     }
     iterator = cstl_set_new_iterator(set);
     while( (element = iterator->next(iterator)) ) {
         const void *obj = *((const void **) iterator->current_value(iterator));
-        fn(obj, p);
+        fn(set, obj, &stop, p);
+        if (stop != false) { break; }
     }
     cstl_set_delete_iterator(iterator);
 }
@@ -253,7 +351,7 @@ void obj_map_traverse(struct cstl_map *map, void(*fn)(const void *key, const voi
 void init_obfs(struct server_env_t *env, const char *protocol, const char *obfs) {
     struct obfs_t *protocol_plugin;
     struct obfs_t *obfs_plugin;
-    protocol_plugin = obfs_instance_create(protocol);
+    protocol_plugin = protocol_instance_create(protocol);
     if (protocol_plugin) {
         env->protocol_global = protocol_plugin->generate_global_init_data();
         obfs_instance_destroy(protocol_plugin);
@@ -267,7 +365,7 @@ void init_obfs(struct server_env_t *env, const char *protocol, const char *obfs)
 }
 
 struct tunnel_cipher_ctx * tunnel_cipher_create(struct server_env_t *env, size_t tcp_mss) {
-    struct server_info_t server_info = { {0}, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    struct server_info_t server_info = { {0}, 0, 0, 0, {0}, 0, {0}, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
     struct server_config *config = env->config;
 
@@ -285,6 +383,7 @@ struct tunnel_cipher_ctx * tunnel_cipher_create(struct server_env_t *env, size_t
     if (config->remote_host && strlen(config->remote_host)) {
         strcpy(server_info.host, config->remote_host);
     }
+    server_info.config = config;
     server_info.port = config->remote_port;
     server_info.iv_len = enc_get_iv_len(env->cipher);
     memcpy(server_info.iv, enc_ctx_get_iv(tc->e_ctx), server_info.iv_len);
@@ -306,7 +405,7 @@ struct tunnel_cipher_ctx * tunnel_cipher_create(struct server_env_t *env, size_t
         server_info.param = config->protocol_param;
         server_info.g_data = env->protocol_global;
 
-        tc->protocol = obfs_instance_create(config->protocol);
+        tc->protocol = protocol_instance_create(config->protocol);
         if (tc->protocol) {
             tc->protocol->set_server_info(tc->protocol, &server_info);
         }
@@ -376,10 +475,16 @@ enum ssr_error tunnel_cipher_client_encrypt(struct tunnel_cipher_ctx *tc, struct
     struct server_env_t *env = tc->env;
     // SSR beg
     struct obfs_t *protocol_plugin = tc->protocol;
-    ASSERT(buf->capacity >= SSR_BUFF_SIZE);
+    size_t capacity;
+    buffer_realloc(buf, SSR_BUFF_SIZE);
+    capacity = buffer_get_capacity(buf);
     if (protocol_plugin && protocol_plugin->client_pre_encrypt) {
-        buf->len = (size_t)protocol_plugin->client_pre_encrypt(
-            tc->protocol, (char **)&buf->buffer, (int)buf->len, &buf->capacity);
+        size_t len = 0;
+        uint8_t *p = (uint8_t *) buffer_raw_clone(buf, &malloc, &len, &capacity);
+        len = (size_t) protocol_plugin->client_pre_encrypt(
+            tc->protocol, (char **)&p, (int)len, &capacity);
+        buffer_store(buf, p, len);
+        free(p);
     }
     err = ss_encrypt(env->cipher, buf, tc->e_ctx, SSR_BUFF_SIZE);
     if (err != 0) {
@@ -403,7 +508,7 @@ enum ssr_error tunnel_cipher_client_decrypt(struct tunnel_cipher_ctx *tc, struct
     // SSR beg
     struct obfs_t *obfs_plugin = tc->obfs;
 
-    ASSERT(buf->len <= SSR_BUFF_SIZE);
+    buffer_realloc(buf, SSR_BUFF_SIZE);
 
     if (obfs_plugin && obfs_plugin->client_decode) {
         bool needsendback = 0;
@@ -416,11 +521,13 @@ enum ssr_error tunnel_cipher_client_decrypt(struct tunnel_cipher_ctx *tc, struct
             struct buffer_t *empty = buffer_create_from((const uint8_t *)"", 0);
             struct buffer_t *sendback = obfs_plugin->client_encode(tc->obfs, empty);
             ASSERT(feedback);
-            *feedback = sendback;
+            if (feedback) {
+                *feedback = sendback;
+            }
             buffer_release(empty);
         }
     }
-    if (buf->len > 0) {
+    if (buffer_get_length(buf) > 0) {
         int err = ss_decrypt(env->cipher, buf, tc->d_ctx, SSR_BUFF_SIZE);
         if (err != 0) {
             return ssr_error_invalid_password;
@@ -428,12 +535,17 @@ enum ssr_error tunnel_cipher_client_decrypt(struct tunnel_cipher_ctx *tc, struct
     }
     protocol_plugin = tc->protocol;
     if (protocol_plugin && protocol_plugin->client_post_decrypt) {
+        size_t len0 = 0, capacity = 0;
+        uint8_t *p = (uint8_t *) buffer_raw_clone(buf, &malloc, &len0, &capacity);
         ssize_t len = protocol_plugin->client_post_decrypt(
-            tc->protocol, (char **)&buf->buffer, (int)buf->len, &buf->capacity);
+            tc->protocol, (char **)&p, (int)len0, &capacity);
+        if (len >= 0) {
+            buffer_store(buf, p, (size_t)len);
+        }
+        free(p);
         if (len < 0) {
             return ssr_error_client_post_decrypt;
         }
-        buf->len = (size_t)len;
     }
     // SSR end
     return ssr_ok;
@@ -471,8 +583,8 @@ struct buffer_t * tunnel_cipher_server_encrypt(struct tunnel_cipher_ctx *tc, con
 struct buffer_t * 
 tunnel_cipher_server_decrypt(struct tunnel_cipher_ctx *tc, 
                              const struct buffer_t *buf, 
-                             struct buffer_t **receipt, 
-                             struct buffer_t **confirm)
+                             struct buffer_t **obfs_receipt, 
+                             struct buffer_t **proto_confirm)
 {
     bool need_decrypt = true;
     int err;
@@ -481,8 +593,8 @@ tunnel_cipher_server_decrypt(struct tunnel_cipher_ctx *tc,
     struct obfs_t *protocol = tc->protocol;
     struct buffer_t *ret = NULL;
 
-    if (receipt) { *receipt = NULL; }
-    if (confirm) { *confirm = NULL; }
+    if (obfs_receipt) { *obfs_receipt = NULL; }
+    if (proto_confirm) { *proto_confirm = NULL; }
 
     if (obfs && obfs->server_decode) {
         bool need_feedback = false;
@@ -491,9 +603,9 @@ tunnel_cipher_server_decrypt(struct tunnel_cipher_ctx *tc,
             return NULL;
         }
         if (need_feedback) {
-            if (receipt) {
+            if (obfs_receipt) {
                 struct buffer_t *empty = buffer_create_from((const uint8_t *)"", 0);
-                *receipt = obfs->server_encode(obfs, empty);
+                *obfs_receipt = obfs->server_encode(obfs, empty);
                 buffer_release(empty);
             }
             buffer_reset(ret);
@@ -502,7 +614,7 @@ tunnel_cipher_server_decrypt(struct tunnel_cipher_ctx *tc,
     } else {
         ret = buffer_clone(buf);
     }
-    if (need_decrypt && ret && ret->len) {
+    if (need_decrypt && ret && buffer_get_length(ret)) {
         /*
         // TODO: check IV
         if (is_completed_package(env, ret->buffer, ret->len) == false) {
@@ -510,13 +622,13 @@ tunnel_cipher_server_decrypt(struct tunnel_cipher_ctx *tc,
             return NULL;
         }
         */
-        if (protocol && protocol->server.recv_iv[0] == 0) {
-            size_t iv_len = protocol->server.iv_len;
-            memmove(protocol->server.recv_iv, ret->buffer, iv_len);
-            protocol->server.recv_iv_len = iv_len;
+        if (protocol && protocol->server_info.recv_iv[0] == 0) {
+            size_t iv_len = protocol->server_info.iv_len;
+            memmove(protocol->server_info.recv_iv, buffer_get_data(ret, NULL), iv_len);
+            protocol->server_info.recv_iv_len = iv_len;
         }
 
-        err = ss_decrypt(env->cipher, ret, tc->d_ctx, max(SSR_BUFF_SIZE, ret->capacity));
+        err = ss_decrypt(env->cipher, ret, tc->d_ctx, max(SSR_BUFF_SIZE, buffer_get_capacity(ret)));
         if (err != 0) {
             buffer_release(ret); ret = NULL;
             return ret;
@@ -527,9 +639,9 @@ tunnel_cipher_server_decrypt(struct tunnel_cipher_ctx *tc,
         struct buffer_t *tmp = protocol->server_post_decrypt(protocol, ret, &feedback);
         buffer_release(ret); ret = tmp;
         if (feedback) {
-            if (confirm) {
+            if (proto_confirm) {
                 struct buffer_t *empty = buffer_create_from((const uint8_t *)"", 0);
-                *confirm  = tunnel_cipher_server_encrypt(tc, empty);
+                *proto_confirm  = tunnel_cipher_server_encrypt(tc, empty);
                 buffer_release(empty);
             }
         }
@@ -537,155 +649,75 @@ tunnel_cipher_server_decrypt(struct tunnel_cipher_ctx *tc,
     return ret;
 }
 
-#define USING_PLAINTEXT_CIPHER 1
-
-enum ssr_error tunnel_tls_cipher_client_encrypt(struct tunnel_cipher_ctx *tc, struct buffer_t *buf) {
-#if USING_PLAINTEXT_CIPHER
-    return ssr_ok;
-#else
-    int err;
-    struct server_env_t *env = tc->env;
-    ASSERT(buf->capacity >= SSR_BUFF_SIZE);
-    err = ss_encrypt(env->cipher, buf, tc->e_ctx, SSR_BUFF_SIZE);
-    if (err != 0) {
-        return ssr_error_invalid_password;
-    }
-    return ssr_ok;
-#endif
-}
-
-enum ssr_error tunnel_tls_cipher_client_decrypt(struct tunnel_cipher_ctx *tc, struct buffer_t *buf, struct buffer_t **feedback) {
-#if USING_PLAINTEXT_CIPHER
-    return ssr_ok;
-#else
-    struct server_env_t *env = tc->env;
-    // ASSERT(buf->len <= SSR_BUFF_SIZE);
-    if (feedback) { *feedback = NULL; }
-    if (buf->len > 0) {
-        int err = ss_decrypt(env->cipher, buf, tc->d_ctx, SSR_BUFF_SIZE);
-        if (err != 0) {
-            return ssr_error_invalid_password;
-        }
-    }
-    return ssr_ok;
-#endif
-}
-
-struct buffer_t * tunnel_tls_cipher_server_encrypt(struct tunnel_cipher_ctx *tc, const struct buffer_t *buf) {
-#if USING_PLAINTEXT_CIPHER
-    return buffer_clone(buf);
-#else
-    int err;
-    struct server_env_t *env = tc->env;
-    struct buffer_t *ret = NULL;
-    do {
-        ret = buffer_clone(buf);
-        if (ret == NULL) {
-            break;
-        }
-        err = ss_encrypt(env->cipher, ret, tc->e_ctx, SSR_BUFF_SIZE);
-        if (err != 0) {
-            ASSERT(false);
-            buffer_release(ret); ret = NULL;
-            break;
-        }
-    } while (0);
-    return ret;
-#endif
-}
-
-struct buffer_t * tunnel_tls_cipher_server_decrypt(struct tunnel_cipher_ctx *tc, const struct buffer_t *buf, struct buffer_t **receipt, struct buffer_t **confirm) {
-#if USING_PLAINTEXT_CIPHER
-    return buffer_clone(buf);
-#else
-    int err;
-    struct server_env_t *env = tc->env;
-    struct buffer_t *ret = NULL;
-
-    if (receipt) { *receipt = NULL; }
-    if (confirm) { *confirm = NULL; }
-
-    ret = buffer_clone(buf);
-
-    err = ss_decrypt(env->cipher, ret, tc->d_ctx, max(SSR_BUFF_SIZE, ret->capacity));
-    if (err != 0) {
-        buffer_release(ret); ret = NULL;
-    }
-
-    return ret;
-#endif
-}
-
 bool pre_parse_header(struct buffer_t *data) {
     uint8_t datatype = 0;
+    uint8_t tmp;
     size_t rand_data_size = 0;
     size_t hdr_len = 0;
+    size_t len = 0;
+    const uint8_t *buffer = buffer_get_data(data, &len);
 
-    if (data==NULL || data->buffer==NULL || data->len==0) {
+    if (data==NULL || buffer==NULL || len==0) {
         return false;
     }
 
-    datatype = data->buffer[0];
+    datatype = buffer[0];
 
     if (datatype == 0x80) {
-        if (data->len <= 2) {
+        if (len <= 2) {
             return false;
         }
-        rand_data_size = (size_t) data->buffer[1];
+        rand_data_size = (size_t) buffer[1];
         hdr_len = rand_data_size + 2;
-        if (hdr_len >= data->len) {
+        if (hdr_len >= len) {
             // header too short, maybe wrong password or encryption method
             return false;
         }
 
-        memmove(data->buffer, data->buffer + hdr_len, data->len - hdr_len);
-        data->len -= hdr_len;
-
+        buffer_shortened_to(data, hdr_len, len - hdr_len);
         return true;
     }
     if (datatype == 0x81) {
         hdr_len = 1;
-        memmove(data->buffer, data->buffer + hdr_len, data->len - hdr_len);
-        data->len -= hdr_len;
+        buffer_shortened_to(data, hdr_len, len - hdr_len);
         return true;
     }
     if (datatype == 0x82) {
-        if (data->len <= 3) {
+        if (len <= 3) {
             return false;
         }
-        rand_data_size = (size_t) ntohs( *((uint16_t *)(data->buffer+1)) );
+        rand_data_size = (size_t) ntohs( *((uint16_t *)(buffer+1)) );
         hdr_len = rand_data_size + 3;
-        if (hdr_len >= data->len) {
+        if (hdr_len >= len) {
             // header too short, maybe wrong password or encryption method
             return false;
         }
-        memmove(data->buffer, data->buffer + hdr_len, data->len - hdr_len);
-        data->len -= hdr_len;
+        buffer_shortened_to(data, hdr_len, len - hdr_len);
         return true;
     }
-    if ((datatype == 0x88) || (~datatype == 0x88)) {
+    tmp = (~datatype);
+    if ((datatype == 0x88) || (tmp == 0x88)) {
         uint32_t crc = 0;
         size_t data_size = 0;
         size_t start_pos = 0;
-        size_t origin_len = data->len;
-        if (data->len <= (7 + 7)) {
+        size_t origin_len = len;
+        if (len <= (7 + 7)) {
             return false;
         }
-        data_size = (size_t) ntohs( *((uint16_t *)(data->buffer+1)) );
-        crc = crc32_imp(data->buffer, data_size);
+        data_size = (size_t) ntohs( *((uint16_t *)(buffer+1)) );
+        crc = crc32_imp(buffer, data_size);
         if (crc != 0xffffffff) {
-            // uncorrect CRC32, maybe wrong password or encryption method
+            // incorrect CRC32, maybe wrong password or encryption method
             return false;
         }
-        start_pos = (size_t)(3 + data->buffer[3]);
+        start_pos = (size_t)(3 + (size_t)buffer[3]);
 
-        data->len = data_size - (4 + start_pos);
-        memmove(data->buffer, data->buffer + start_pos, data->len);
+        buffer_shortened_to(data, start_pos, data_size - (4 + start_pos));
 
         if (data_size < origin_len) {
             size_t len2 = origin_len - data_size;
-            memmove(data->buffer + data->len, data->buffer + data_size, len2);
-            data->len += len2;
+            buffer = buffer_get_data(data, &len);
+            buffer_concatenate(data, buffer + data_size, len2);
         }
         return true;
     }

@@ -14,7 +14,7 @@ typedef struct verify_simple_local_data {
 }verify_simple_local_data;
 
 void verify_simple_local_data_init(verify_simple_local_data* local) {
-    local->recv_buffer = (char*)malloc(16384);
+    local->recv_buffer = (char*) calloc(16384, sizeof(char));
     local->recv_buffer_size = 0;
 }
 
@@ -28,10 +28,8 @@ struct obfs_t * verify_simple_new_obfs(void) {
 
     obfs->client_pre_encrypt = verify_simple_client_pre_encrypt;
     obfs->client_post_decrypt = verify_simple_client_post_decrypt;
-    obfs->client_udp_pre_encrypt = NULL;
-    obfs->client_udp_post_decrypt = NULL;
 
-    obfs->l_data = malloc(sizeof(verify_simple_local_data));
+    obfs->l_data = calloc(1, sizeof(verify_simple_local_data));
     verify_simple_local_data_init((verify_simple_local_data*)obfs->l_data);
 
     return obfs;
@@ -63,11 +61,12 @@ int verify_simple_pack_data(char *data, int datalength, char *outdata) {
 size_t verify_simple_client_pre_encrypt(struct obfs_t *obfs, char **pplaindata, size_t datalength, size_t *capacity) {
     char *plaindata = *pplaindata;
     //verify_simple_local_data *local = (verify_simple_local_data*)obfs->l_data;
-    char * out_buffer = (char*)malloc((size_t)(datalength * 2 + 32));
+    char * out_buffer = (char*) calloc((size_t)(datalength * 2 + 32), sizeof(char));
     char * buffer = out_buffer;
     char * data = plaindata;
     int len = (int) datalength;
     int pack_len;
+    (void)obfs;
     while ( len > verify_simple_pack_unit_size ) {
         pack_len = verify_simple_pack_data(data, verify_simple_pack_unit_size, buffer);
         buffer += pack_len;
@@ -101,7 +100,7 @@ ssize_t verify_simple_client_post_decrypt(struct obfs_t *obfs, char **pplaindata
     memmove(recv_buffer + local->recv_buffer_size, plaindata, datalength);
     local->recv_buffer_size += datalength;
 
-    out_buffer = (char*)malloc((size_t)local->recv_buffer_size);
+    out_buffer = (char*) calloc((size_t)local->recv_buffer_size, sizeof(char));
     buffer = out_buffer;
     while (local->recv_buffer_size > 2) {
         int length = ((int)recv_buffer[0] << 8) | recv_buffer[1];

@@ -39,12 +39,12 @@
 
 #define USE_TTY()
 #define USE_SYSLOG(ident)
-#define LOGI(...)                                                \
+#define LOGI(format, ...)                                                \
     ((void)__android_log_print(ANDROID_LOG_DEBUG, "shadowsocks", \
-                               __VA_ARGS__))
-#define LOGE(...)                                                \
+                               (format), ## __VA_ARGS__))
+#define LOGE(format, ...)                                                \
     ((void)__android_log_print(ANDROID_LOG_ERROR, "shadowsocks", \
-                               __VA_ARGS__))
+                               (format), ## __VA_ARGS__))
 
 #else
 
@@ -150,7 +150,7 @@ extern int use_syslog;
             char timestr[20] = { 0 };                                            \
             strftime(timestr, 20, TIME_FORMAT, localtime(&now));                 \
             if (use_tty) {                                                       \
-                fprintf(stderr, "\e[01;32m %s INFO: \e[0m" format "\n", timestr, \
+                fprintf(stderr, "\033[01;32m %s INFO: \033[0m" format "\n", timestr, \
                         ## __VA_ARGS__);                                         \
             } else {                                                             \
                 fprintf(stderr, " %s INFO: " format "\n", timestr,               \
@@ -168,7 +168,7 @@ extern int use_syslog;
             char timestr[20] = { 0 };                                             \
             strftime(timestr, 20, TIME_FORMAT, localtime(&now));                  \
             if (use_tty) {                                                        \
-                fprintf(stderr, "\e[01;35m %s ERROR: \e[0m" format "\n", timestr, \
+                fprintf(stderr, "\033[01;35m %s ERROR: \033[0m" format "\n", timestr, \
                         ## __VA_ARGS__);                                          \
             } else {                                                              \
                 fprintf(stderr, " %s ERROR: " format "\n", timestr,               \
